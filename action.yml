@@ -1,0 +1,72 @@
+name: 'Generate Version Report'
+description: 'Generate comprehensive version reports for monorepo projects using Mister.Version'
+author: 'Mister.Version Team'
+
+branding:
+  icon: 'file-text'
+  color: 'purple'
+
+inputs:
+  repository-path:
+    description: 'Path to the Git repository root'
+    required: false
+    default: '.'
+  project-dir:
+    description: 'Directory containing projects to analyze (relative to repository-path)'
+    required: false
+  output-format:
+    description: 'Report output format (text, json, csv, markdown)'
+    required: false
+    default: 'markdown'
+  output-file:
+    description: 'File path to save the report (if not specified, outputs to console/summary)'
+    required: false
+  branch:
+    description: 'Branch to analyze (defaults to current branch)'
+    required: false
+  tag-prefix:
+    description: 'Prefix for version tags'
+    required: false
+    default: 'v'
+  include-commits:
+    description: 'Include commit information in the report'
+    required: false
+    default: 'true'
+  include-dependencies:
+    description: 'Include dependency information in the report'
+    required: false
+    default: 'true'
+  changed-only:
+    description: 'Show only projects with version changes (false = show all projects)'
+    required: false
+    default: 'false'
+  post-to-pr:
+    description: 'Post the report as a PR comment (requires pull_request event)'
+    required: false
+    default: 'false'
+  update-existing-comment:
+    description: 'Update existing PR comment instead of creating new one'
+    required: false
+    default: 'true'
+  comment-header:
+    description: 'Header text for PR comments to identify them'
+    required: false
+    default: '## 📊 Version Report'
+  token:
+    description: 'GitHub token for posting PR comments'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  report-content:
+    description: 'The generated report content'
+  report-file:
+    description: 'Path to the generated report file (if output-file was specified)'
+  projects-count:
+    description: 'Number of projects analyzed'
+  changed-projects-count:
+    description: 'Number of projects with version changes'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
