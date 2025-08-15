@@ -101,21 +101,66 @@ async function run(): Promise<void> {
       })
     }
 
-    // Add to job summary
-    if (outputFormat === 'markdown') {
-      await core.summary.addRaw(formattedContent).write()
-    } else if (outputFormat === 'json') {
-      // For JSON output, create a better formatted summary
+    // Add collapsible summary to job output
+    const changedProjects = report.projects.filter(p => p.version?.versionChanged)
+    const packableProjects = report.projects.filter(p => p.isPackable)
+    
+    await core.summary
+      .addHeading('📊 MonoRepo Version Report')
+      .addDetails('📈 Summary Statistics', 
+        `- **Repository**: \`${report.repository}\`\n` +
+        `- **Branch**: \`${report.branch}\` (${report.branchType})\n` +
+        `- **Total Projects**: ${report.summary.totalProjects}\n` +
+        `- **Changed Projects**: ${report.summary.changedProjects}\n` +
+        `- **Test Projects**: ${report.summary.testProjects}\n` +
+        `- **Packable Projects**: ${report.summary.packableProjects}\n` +
+        `- **Output Format**: ${outputFormat}${outputFile ? `\n- **Report File**: \`${outputFile}\`` : ''}`
+      )
+
+    if (changedProjects.length > 0) {
       await core.summary
-        .addHeading('📊 Version Report')
-        .addDetails('📋 JSON Report Data', `\`\`\`json\n${formattedContent}\n\`\`\``)
-        .write()
-    } else {
-      await core.summary
-        .addHeading('📊 Version Report')
-        .addCodeBlock(formattedContent, 'text')
-        .write()
+        .addDetails('🔄 Changed Projects', 
+          changedProjects.map(p => {
+            const prevVersion = p.version.previousVersion ? ` (was \`${p.version.previousVersion}\`)` : ''
+            const reason = p.version.changeReason ? ` - _${p.version.changeReason}_` : ''
+            return `- **${p.name}**: \`${p.version.version}\`${prevVersion}${reason}`
+          }).join('\n')
+        )
     }
+
+    if (packableProjects.length > 0) {
+      await core.summary
+        .addDetails('📦 Packable Projects', 
+          packableProjects.map(p => {
+            const status = p.version?.versionChanged ? ' 🔄' : ' ✅'
+            return `- **${p.name}**${status}: \`${p.version?.version || 'Unknown'}\``
+          }).join('\n')
+        )
+    }
+
+    // Dependencies section if available
+    const projectsWithDeps = report.projects.filter(p => p.dependencies?.direct && p.dependencies.direct.length > 0)
+    if (projectsWithDeps.length > 0) {
+      const depsSummary = projectsWithDeps.map(p => 
+        `**${p.name}**: ${p.dependencies?.direct?.map(d => `${d.name} (${d.version})`).join(', ') || 'None'}`
+      ).join('\n\n')
+      
+      await core.summary
+        .addDetails('🔗 Project Dependencies', depsSummary)
+    }
+
+    if (outputFormat !== 'markdown') {
+      await core.summary
+        .addDetails('📋 Full Report Data', 
+          `\`\`\`${outputFormat}\n${formattedContent}\n\`\`\``
+        )
+    } else {
+      // For markdown, add the formatted content directly but in a collapsible section
+      await core.summary
+        .addDetails('📄 Detailed Report', formattedContent)
+    }
+
+    await core.summary.write()
 
     // Set outputs
     core.setOutput('report-content', formattedContent)
@@ -126,6 +171,13 @@ async function run(): Promise<void> {
     core.info(`✅ Report generated: ${report.summary.totalProjects} projects, ${report.summary.changedProjects} with changes`)
 
   } catch (error) {
+    await core.summary
+      .addHeading('❌ Version Report Generation Failed')
+      .addDetails('🐛 Error Details',
+        `\`\`\`\n${error instanceof Error ? error.message : String(error)}\n\`\`\``
+      )
+      .write()
+
     core.setFailed(`Failed to generate version report: ${error instanceof Error ? error.message : String(error)}`)
   }
 }

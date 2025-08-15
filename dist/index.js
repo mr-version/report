@@ -1,422 +1,6 @@
 require('./sourcemap-register.js');/******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 137:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.run = run;
-const core = __importStar(__nccwpck_require__(7484));
-const exec = __importStar(__nccwpck_require__(5236));
-const github = __importStar(__nccwpck_require__(3228));
-const fs = __importStar(__nccwpck_require__(9896));
-const path = __importStar(__nccwpck_require__(6928));
-async function run() {
-    try {
-        const repositoryPath = core.getInput('repository-path') || '.';
-        const projectDir = core.getInput('project-dir');
-        const outputFormat = core.getInput('output-format') || 'markdown';
-        const outputFile = core.getInput('output-file');
-        const branch = core.getInput('branch');
-        const tagPrefix = core.getInput('tag-prefix') || 'v';
-        const includeCommits = core.getBooleanInput('include-commits');
-        const includeDependencies = core.getBooleanInput('include-dependencies');
-        const showChangedOnly = core.getBooleanInput('changed-only');
-        const postToPr = core.getBooleanInput('post-to-pr');
-        const updateExistingComment = core.getBooleanInput('update-existing-comment');
-        const commentHeader = core.getInput('comment-header') || '## 📊 Version Report';
-        const token = core.getInput('token');
-        core.info('Generating version report...');
-        const report = await generateReport({
-            repositoryPath,
-            projectDir,
-            outputFormat: 'json',
-            branch,
-            tagPrefix,
-            includeCommits,
-            includeDependencies
-        });
-        const formattedContent = formatReport(report, outputFormat, showChangedOnly);
-        let reportFilePath;
-        if (outputFile) {
-            reportFilePath = path.resolve(repositoryPath, outputFile);
-            await fs.promises.writeFile(reportFilePath, formattedContent);
-            core.info(`Report saved to: ${reportFilePath}`);
-        }
-        if (postToPr && github.context.eventName === 'pull_request') {
-            await postReportToPr({
-                content: formattedContent,
-                header: commentHeader,
-                updateExisting: updateExistingComment,
-                token
-            });
-        }
-        if (outputFormat === 'markdown') {
-            await core.summary.addRaw(formattedContent).write();
-        }
-        else if (outputFormat === 'json') {
-            await core.summary
-                .addHeading('📊 Version Report')
-                .addDetails('📋 JSON Report Data', `\`\`\`json\n${formattedContent}\n\`\`\``)
-                .write();
-        }
-        else {
-            await core.summary
-                .addHeading('📊 Version Report')
-                .addCodeBlock(formattedContent, 'text')
-                .write();
-        }
-        core.setOutput('report-content', formattedContent);
-        core.setOutput('report-file', reportFilePath || '');
-        core.setOutput('projects-count', report.summary.totalProjects.toString());
-        core.setOutput('changed-projects-count', report.summary.changedProjects.toString());
-        core.info(`✅ Report generated: ${report.summary.totalProjects} projects, ${report.summary.changedProjects} with changes`);
-    }
-    catch (error) {
-        core.setFailed(`Failed to generate version report: ${error instanceof Error ? error.message : String(error)}`);
-    }
-}
-async function generateReport(options) {
-    const args = [
-        'report',
-        '--repo', options.repositoryPath,
-        '--output', 'json'
-    ];
-    if (options.projectDir) {
-        args.push('--project-dir', options.projectDir);
-    }
-    if (options.branch) {
-        args.push('--branch', options.branch);
-    }
-    if (options.tagPrefix) {
-        args.push('--tag-prefix', options.tagPrefix);
-    }
-    args.push('--include-commits', options.includeCommits.toString());
-    args.push('--include-dependencies', options.includeDependencies.toString());
-    args.push('--include-test-projects', 'true');
-    args.push('--include-non-packable', 'true');
-    const output = await exec.getExecOutput('mr-version', args, {
-        silent: true,
-        ignoreReturnCode: true
-    });
-    if (output.exitCode !== 0) {
-        throw new Error(`mr-version report failed: ${output.stderr}`);
-    }
-    try {
-        const rawOutput = JSON.parse(output.stdout);
-        let report;
-        if (rawOutput.projects && Array.isArray(rawOutput.projects)) {
-            const allProjects = rawOutput.projects.map((p) => {
-                const versionObj = typeof p.version === 'object' && p.version !== null && 'version' in p.version
-                    ? p.version
-                    : {
-                        version: p.version || 'Unknown',
-                        versionChanged: p.versionChanged || false,
-                        changeReason: p.changeReason,
-                        commitSha: p.commitSha,
-                        commitDate: p.commitDate,
-                        commitMessage: p.commitMessage,
-                        branchType: p.branchType,
-                        branchName: p.branchName,
-                        commitHeight: p.commitHeight
-                    };
-                return {
-                    name: p.name || p.project || 'Unknown',
-                    path: p.path || 'Unknown',
-                    fullPath: p.fullPath || path.join(options.repositoryPath, p.path || ''),
-                    version: versionObj,
-                    isTestProject: p.isTestProject || false,
-                    isPackable: p.isPackable || false,
-                    dependencies: p.dependencies || {
-                        direct: [],
-                        all: []
-                    }
-                };
-            });
-            report = {
-                repository: options.repositoryPath,
-                branch: 'main',
-                branchType: 'Main',
-                projects: allProjects,
-                summary: {
-                    totalProjects: allProjects.length,
-                    changedProjects: allProjects.filter((p) => p.version.versionChanged).length,
-                    testProjects: allProjects.filter((p) => p.isTestProject).length,
-                    packableProjects: allProjects.filter((p) => p.isPackable).length
-                }
-            };
-        }
-        else {
-            report = rawOutput;
-            if (!report.summary) {
-                report.summary = {
-                    totalProjects: report.projects.length,
-                    changedProjects: report.projects.filter(p => p.version?.versionChanged).length,
-                    testProjects: report.projects.filter(p => p.isTestProject).length,
-                    packableProjects: report.projects.filter(p => p.isPackable).length
-                };
-            }
-        }
-        await enhanceWithPreviousVersions(report, options.repositoryPath, options.tagPrefix);
-        return report;
-    }
-    catch (error) {
-        throw new Error(`Failed to parse report output: ${error}`);
-    }
-}
-function formatReport(report, format, showChangedOnly) {
-    switch (format.toLowerCase()) {
-        case 'json':
-            return JSON.stringify(report, null, 2);
-        case 'csv':
-            return formatAsCsv(report, showChangedOnly);
-        case 'text':
-            return formatAsText(report, showChangedOnly);
-        case 'markdown':
-        default:
-            return formatAsMarkdown(report, showChangedOnly);
-    }
-}
-function formatAsMarkdown(report, showChangedOnly) {
-    const lines = [];
-    lines.push('## 📊 MonoRepo Version Report');
-    lines.push('');
-    lines.push(`**Repository:** \`${report.repository}\``);
-    lines.push(`**Branch:** \`${report.branch}\` (${report.branchType})`);
-    if (report.globalVersion) {
-        lines.push(`**Global Version:** \`${report.globalVersion}\``);
-    }
-    lines.push('');
-    lines.push('### 📈 Summary');
-    lines.push('');
-    lines.push(`| Metric | Count |`);
-    lines.push(`|--------|-------|`);
-    lines.push(`| Total Projects | ${report.summary.totalProjects} |`);
-    lines.push(`| Changed Projects | ${report.summary.changedProjects} |`);
-    lines.push(`| Test Projects | ${report.summary.testProjects} |`);
-    lines.push(`| Packable Projects | ${report.summary.packableProjects} |`);
-    lines.push('');
-    const changedProjects = report.projects.filter(p => p.version?.versionChanged);
-    if (changedProjects.length > 0) {
-        lines.push('### 🔄 Changed Projects');
-        lines.push('');
-        lines.push('| Project | Previous Version | New Version | Reason |');
-        lines.push('|---------|------------------|-------------|--------|');
-        for (const project of changedProjects) {
-            const previousVersion = project.version.previousVersion || 'N/A';
-            const newVersion = project.version.version || 'Unknown';
-            const reason = project.version.changeReason || 'N/A';
-            lines.push(`| **${project.name}** | \`${previousVersion}\` | \`${newVersion}\` | ${reason} |`);
-        }
-        lines.push('');
-    }
-    const projectsToShow = showChangedOnly
-        ? report.projects.filter(p => p.version?.versionChanged)
-        : report.projects;
-    if (projectsToShow.length > 0) {
-        const tableTitle = showChangedOnly ? '### 🔄 Changed Projects Only' : '### 📦 All Projects';
-        lines.push(tableTitle);
-        lines.push('');
-        lines.push('| Project | Version | Type | Path |');
-        lines.push('|---------|---------|------|------|');
-        for (const project of projectsToShow) {
-            const type = project.isTestProject ? 'Test' : (project.isPackable ? 'Package' : 'Other');
-            const version = project.version?.version || 'Unknown';
-            const status = project.version?.versionChanged ? ' 🔄' : '';
-            lines.push(`| **${project.name}**${status} | \`${version}\` | ${type} | \`${project.path}\` |`);
-        }
-        lines.push('');
-    }
-    const projectsWithDeps = report.projects.filter(p => p.dependencies?.direct && p.dependencies.direct.length > 0);
-    if (projectsWithDeps.length > 0) {
-        lines.push('### 🔗 Dependencies');
-        lines.push('');
-        for (const project of projectsWithDeps) {
-            lines.push(`#### ${project.name}`);
-            lines.push('');
-            if (project.dependencies?.direct) {
-                for (const dep of project.dependencies.direct) {
-                    lines.push(`- ${dep.name} (${dep.version || 'Unknown'})`);
-                }
-            }
-            lines.push('');
-        }
-    }
-    return lines.join('\n');
-}
-function formatAsText(report, showChangedOnly) {
-    const lines = [];
-    lines.push('=== MonoRepo Version Report ===');
-    lines.push(`Repository: ${report.repository}`);
-    lines.push(`Branch: ${report.branch} (${report.branchType})`);
-    if (report.globalVersion) {
-        lines.push(`Global Version: ${report.globalVersion}`);
-    }
-    lines.push(`Total Projects: ${report.summary.totalProjects}`);
-    lines.push(`Changed Projects: ${report.summary.changedProjects}`);
-    lines.push('');
-    const projectsToShow = showChangedOnly
-        ? report.projects.filter(p => p.version?.versionChanged)
-        : report.projects;
-    for (const project of projectsToShow) {
-        const status = project.version?.versionChanged ? 'CHANGED' : 'UNCHANGED';
-        const version = project.version?.version || 'Unknown';
-        lines.push(`[${status}] ${project.name}: ${version}`);
-        lines.push(`  Path: ${project.path}`);
-        if (project.version?.versionChanged && project.version?.previousVersion) {
-            lines.push(`  Previous: ${project.version.previousVersion}`);
-        }
-        if (project.version?.changeReason) {
-            lines.push(`  Reason: ${project.version.changeReason}`);
-        }
-        if (project.dependencies?.direct && project.dependencies.direct.length > 0) {
-            lines.push(`  Dependencies: ${project.dependencies.direct.map(d => d.name).join(', ')}`);
-        }
-        lines.push('');
-    }
-    return lines.join('\n');
-}
-function formatAsCsv(report, showChangedOnly) {
-    const lines = [];
-    lines.push('Project,Version,Previous Version,Changed,Reason,Type,Path,Dependencies');
-    const projectsToShow = showChangedOnly
-        ? report.projects.filter(p => p.version?.versionChanged)
-        : report.projects;
-    for (const project of projectsToShow) {
-        const type = project.isTestProject ? 'Test' : (project.isPackable ? 'Package' : 'Other');
-        const version = project.version?.version || 'Unknown';
-        const previousVersion = project.version?.previousVersion || '';
-        const versionChanged = project.version?.versionChanged || false;
-        const changeReason = project.version?.changeReason || '';
-        const dependencies = project.dependencies?.direct?.map(d => d.name).join(';') || '';
-        lines.push(`"${project.name}","${version}","${previousVersion}","${versionChanged}","${changeReason}","${type}","${project.path}","${dependencies}"`);
-    }
-    return lines.join('\n');
-}
-async function postReportToPr(options) {
-    const octokit = github.getOctokit(options.token);
-    const context = github.context;
-    if (context.eventName !== 'pull_request') {
-        core.warning('Cannot post to PR: not a pull request event');
-        return;
-    }
-    const prNumber = context.payload.pull_request?.number;
-    if (!prNumber) {
-        core.warning('Cannot post to PR: no PR number found');
-        return;
-    }
-    const commentBody = `${options.header}\n\n${options.content}`;
-    try {
-        if (options.updateExisting) {
-            const comments = await octokit.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber
-            });
-            const existingComment = comments.data.find(comment => comment.body?.includes(options.header));
-            if (existingComment) {
-                await octokit.rest.issues.updateComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    comment_id: existingComment.id,
-                    body: commentBody
-                });
-                core.info(`Updated existing PR comment #${existingComment.id}`);
-                return;
-            }
-        }
-        await octokit.rest.issues.createComment({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: prNumber,
-            body: commentBody
-        });
-        core.info(`Posted new PR comment to #${prNumber}`);
-    }
-    catch (error) {
-        core.warning(`Failed to post PR comment: ${error}`);
-    }
-}
-async function enhanceWithPreviousVersions(report, repoPath, tagPrefix) {
-    for (const project of report.projects) {
-        if (project.version?.versionChanged) {
-            const projectName = project.name;
-            const currentVersion = project.version.version;
-            try {
-                const tagsOutput = await exec.getExecOutput('git', ['tag', '-l', `${tagPrefix}${projectName}/*`, '--sort=-version:refname'], { cwd: repoPath, silent: true, ignoreReturnCode: true });
-                if (tagsOutput.exitCode === 0 && tagsOutput.stdout) {
-                    const tags = tagsOutput.stdout.trim().split('\n').filter(t => t);
-                    for (const tag of tags) {
-                        const tagVersion = tag.replace(`${tagPrefix}${projectName}/`, '');
-                        if (tagVersion !== currentVersion) {
-                            project.version.previousVersion = tagVersion;
-                            break;
-                        }
-                    }
-                }
-                if (!project.version.previousVersion) {
-                    const globalTagsOutput = await exec.getExecOutput('git', ['tag', '-l', `${tagPrefix}*`, '--sort=-version:refname'], { cwd: repoPath, silent: true, ignoreReturnCode: true });
-                    if (globalTagsOutput.exitCode === 0 && globalTagsOutput.stdout) {
-                        const tags = globalTagsOutput.stdout.trim().split('\n').filter(t => t);
-                        for (const tag of tags) {
-                            if (!tag.includes('/')) {
-                                const tagVersion = tag.replace(tagPrefix, '');
-                                if (tagVersion !== currentVersion) {
-                                    project.version.previousVersion = tagVersion;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            catch (error) {
-            }
-        }
-    }
-}
-if (require.main === require.cache[eval('__filename')]) {
-    run();
-}
-//# sourceMappingURL=index.js.map
-
-/***/ }),
-
 /***/ 4914:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -30331,6 +29915,452 @@ function wrappy (fn, cb) {
 
 /***/ }),
 
+/***/ 9407:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.run = run;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const github = __importStar(__nccwpck_require__(3228));
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+async function run() {
+    try {
+        const repositoryPath = core.getInput('repository-path') || '.';
+        const projectDir = core.getInput('project-dir');
+        const outputFormat = core.getInput('output-format') || 'markdown';
+        const outputFile = core.getInput('output-file');
+        const branch = core.getInput('branch');
+        const tagPrefix = core.getInput('tag-prefix') || 'v';
+        const includeCommits = core.getBooleanInput('include-commits');
+        const includeDependencies = core.getBooleanInput('include-dependencies');
+        const showChangedOnly = core.getBooleanInput('changed-only');
+        const postToPr = core.getBooleanInput('post-to-pr');
+        const updateExistingComment = core.getBooleanInput('update-existing-comment');
+        const commentHeader = core.getInput('comment-header') || '## 📊 Version Report';
+        const token = core.getInput('token');
+        core.info('Generating version report...');
+        const report = await generateReport({
+            repositoryPath,
+            projectDir,
+            outputFormat: 'json',
+            branch,
+            tagPrefix,
+            includeCommits,
+            includeDependencies
+        });
+        const formattedContent = formatReport(report, outputFormat, showChangedOnly);
+        let reportFilePath;
+        if (outputFile) {
+            reportFilePath = path.resolve(repositoryPath, outputFile);
+            await fs.promises.writeFile(reportFilePath, formattedContent);
+            core.info(`Report saved to: ${reportFilePath}`);
+        }
+        if (postToPr && github.context.eventName === 'pull_request') {
+            await postReportToPr({
+                content: formattedContent,
+                header: commentHeader,
+                updateExisting: updateExistingComment,
+                token
+            });
+        }
+        const changedProjects = report.projects.filter(p => p.version?.versionChanged);
+        const packableProjects = report.projects.filter(p => p.isPackable);
+        await core.summary
+            .addHeading('📊 MonoRepo Version Report')
+            .addDetails('📈 Summary Statistics', `- **Repository**: \`${report.repository}\`\n` +
+            `- **Branch**: \`${report.branch}\` (${report.branchType})\n` +
+            `- **Total Projects**: ${report.summary.totalProjects}\n` +
+            `- **Changed Projects**: ${report.summary.changedProjects}\n` +
+            `- **Test Projects**: ${report.summary.testProjects}\n` +
+            `- **Packable Projects**: ${report.summary.packableProjects}\n` +
+            `- **Output Format**: ${outputFormat}${outputFile ? `\n- **Report File**: \`${outputFile}\`` : ''}`);
+        if (changedProjects.length > 0) {
+            await core.summary
+                .addDetails('🔄 Changed Projects', changedProjects.map(p => {
+                const prevVersion = p.version.previousVersion ? ` (was \`${p.version.previousVersion}\`)` : '';
+                const reason = p.version.changeReason ? ` - _${p.version.changeReason}_` : '';
+                return `- **${p.name}**: \`${p.version.version}\`${prevVersion}${reason}`;
+            }).join('\n'));
+        }
+        if (packableProjects.length > 0) {
+            await core.summary
+                .addDetails('📦 Packable Projects', packableProjects.map(p => {
+                const status = p.version?.versionChanged ? ' 🔄' : ' ✅';
+                return `- **${p.name}**${status}: \`${p.version?.version || 'Unknown'}\``;
+            }).join('\n'));
+        }
+        const projectsWithDeps = report.projects.filter(p => p.dependencies?.direct && p.dependencies.direct.length > 0);
+        if (projectsWithDeps.length > 0) {
+            const depsSummary = projectsWithDeps.map(p => `**${p.name}**: ${p.dependencies?.direct?.map(d => `${d.name} (${d.version})`).join(', ') || 'None'}`).join('\n\n');
+            await core.summary
+                .addDetails('🔗 Project Dependencies', depsSummary);
+        }
+        if (outputFormat !== 'markdown') {
+            await core.summary
+                .addDetails('📋 Full Report Data', `\`\`\`${outputFormat}\n${formattedContent}\n\`\`\``);
+        }
+        else {
+            await core.summary
+                .addDetails('📄 Detailed Report', formattedContent);
+        }
+        await core.summary.write();
+        core.setOutput('report-content', formattedContent);
+        core.setOutput('report-file', reportFilePath || '');
+        core.setOutput('projects-count', report.summary.totalProjects.toString());
+        core.setOutput('changed-projects-count', report.summary.changedProjects.toString());
+        core.info(`✅ Report generated: ${report.summary.totalProjects} projects, ${report.summary.changedProjects} with changes`);
+    }
+    catch (error) {
+        await core.summary
+            .addHeading('❌ Version Report Generation Failed')
+            .addDetails('🐛 Error Details', `\`\`\`\n${error instanceof Error ? error.message : String(error)}\n\`\`\``)
+            .write();
+        core.setFailed(`Failed to generate version report: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+async function generateReport(options) {
+    const args = [
+        'report',
+        '--repo', options.repositoryPath,
+        '--output', 'json'
+    ];
+    if (options.projectDir) {
+        args.push('--project-dir', options.projectDir);
+    }
+    if (options.branch) {
+        args.push('--branch', options.branch);
+    }
+    if (options.tagPrefix) {
+        args.push('--tag-prefix', options.tagPrefix);
+    }
+    args.push('--include-commits', options.includeCommits.toString());
+    args.push('--include-dependencies', options.includeDependencies.toString());
+    args.push('--include-test-projects', 'true');
+    args.push('--include-non-packable', 'true');
+    const output = await exec.getExecOutput('mr-version', args, {
+        silent: true,
+        ignoreReturnCode: true
+    });
+    if (output.exitCode !== 0) {
+        throw new Error(`mr-version report failed: ${output.stderr}`);
+    }
+    try {
+        const rawOutput = JSON.parse(output.stdout);
+        let report;
+        if (rawOutput.projects && Array.isArray(rawOutput.projects)) {
+            const allProjects = rawOutput.projects.map((p) => {
+                const versionObj = typeof p.version === 'object' && p.version !== null && 'version' in p.version
+                    ? p.version
+                    : {
+                        version: p.version || 'Unknown',
+                        versionChanged: p.versionChanged || false,
+                        changeReason: p.changeReason,
+                        commitSha: p.commitSha,
+                        commitDate: p.commitDate,
+                        commitMessage: p.commitMessage,
+                        branchType: p.branchType,
+                        branchName: p.branchName,
+                        commitHeight: p.commitHeight
+                    };
+                return {
+                    name: p.name || p.project || 'Unknown',
+                    path: p.path || 'Unknown',
+                    fullPath: p.fullPath || path.join(options.repositoryPath, p.path || ''),
+                    version: versionObj,
+                    isTestProject: p.isTestProject || false,
+                    isPackable: p.isPackable || false,
+                    dependencies: p.dependencies || {
+                        direct: [],
+                        all: []
+                    }
+                };
+            });
+            report = {
+                repository: options.repositoryPath,
+                branch: 'main',
+                branchType: 'Main',
+                projects: allProjects,
+                summary: {
+                    totalProjects: allProjects.length,
+                    changedProjects: allProjects.filter((p) => p.version.versionChanged).length,
+                    testProjects: allProjects.filter((p) => p.isTestProject).length,
+                    packableProjects: allProjects.filter((p) => p.isPackable).length
+                }
+            };
+        }
+        else {
+            report = rawOutput;
+            if (!report.summary) {
+                report.summary = {
+                    totalProjects: report.projects.length,
+                    changedProjects: report.projects.filter(p => p.version?.versionChanged).length,
+                    testProjects: report.projects.filter(p => p.isTestProject).length,
+                    packableProjects: report.projects.filter(p => p.isPackable).length
+                };
+            }
+        }
+        await enhanceWithPreviousVersions(report, options.repositoryPath, options.tagPrefix);
+        return report;
+    }
+    catch (error) {
+        throw new Error(`Failed to parse report output: ${error}`);
+    }
+}
+function formatReport(report, format, showChangedOnly) {
+    switch (format.toLowerCase()) {
+        case 'json':
+            return JSON.stringify(report, null, 2);
+        case 'csv':
+            return formatAsCsv(report, showChangedOnly);
+        case 'text':
+            return formatAsText(report, showChangedOnly);
+        case 'markdown':
+        default:
+            return formatAsMarkdown(report, showChangedOnly);
+    }
+}
+function formatAsMarkdown(report, showChangedOnly) {
+    const lines = [];
+    lines.push('## 📊 MonoRepo Version Report');
+    lines.push('');
+    lines.push(`**Repository:** \`${report.repository}\``);
+    lines.push(`**Branch:** \`${report.branch}\` (${report.branchType})`);
+    if (report.globalVersion) {
+        lines.push(`**Global Version:** \`${report.globalVersion}\``);
+    }
+    lines.push('');
+    lines.push('### 📈 Summary');
+    lines.push('');
+    lines.push(`| Metric | Count |`);
+    lines.push(`|--------|-------|`);
+    lines.push(`| Total Projects | ${report.summary.totalProjects} |`);
+    lines.push(`| Changed Projects | ${report.summary.changedProjects} |`);
+    lines.push(`| Test Projects | ${report.summary.testProjects} |`);
+    lines.push(`| Packable Projects | ${report.summary.packableProjects} |`);
+    lines.push('');
+    const changedProjects = report.projects.filter(p => p.version?.versionChanged);
+    if (changedProjects.length > 0) {
+        lines.push('### 🔄 Changed Projects');
+        lines.push('');
+        lines.push('| Project | Previous Version | New Version | Reason |');
+        lines.push('|---------|------------------|-------------|--------|');
+        for (const project of changedProjects) {
+            const previousVersion = project.version.previousVersion || 'N/A';
+            const newVersion = project.version.version || 'Unknown';
+            const reason = project.version.changeReason || 'N/A';
+            lines.push(`| **${project.name}** | \`${previousVersion}\` | \`${newVersion}\` | ${reason} |`);
+        }
+        lines.push('');
+    }
+    const projectsToShow = showChangedOnly
+        ? report.projects.filter(p => p.version?.versionChanged)
+        : report.projects;
+    if (projectsToShow.length > 0) {
+        const tableTitle = showChangedOnly ? '### 🔄 Changed Projects Only' : '### 📦 All Projects';
+        lines.push(tableTitle);
+        lines.push('');
+        lines.push('| Project | Version | Type | Path |');
+        lines.push('|---------|---------|------|------|');
+        for (const project of projectsToShow) {
+            const type = project.isTestProject ? 'Test' : (project.isPackable ? 'Package' : 'Other');
+            const version = project.version?.version || 'Unknown';
+            const status = project.version?.versionChanged ? ' 🔄' : '';
+            lines.push(`| **${project.name}**${status} | \`${version}\` | ${type} | \`${project.path}\` |`);
+        }
+        lines.push('');
+    }
+    const projectsWithDeps = report.projects.filter(p => p.dependencies?.direct && p.dependencies.direct.length > 0);
+    if (projectsWithDeps.length > 0) {
+        lines.push('### 🔗 Dependencies');
+        lines.push('');
+        for (const project of projectsWithDeps) {
+            lines.push(`#### ${project.name}`);
+            lines.push('');
+            if (project.dependencies?.direct) {
+                for (const dep of project.dependencies.direct) {
+                    lines.push(`- ${dep.name} (${dep.version || 'Unknown'})`);
+                }
+            }
+            lines.push('');
+        }
+    }
+    return lines.join('\n');
+}
+function formatAsText(report, showChangedOnly) {
+    const lines = [];
+    lines.push('=== MonoRepo Version Report ===');
+    lines.push(`Repository: ${report.repository}`);
+    lines.push(`Branch: ${report.branch} (${report.branchType})`);
+    if (report.globalVersion) {
+        lines.push(`Global Version: ${report.globalVersion}`);
+    }
+    lines.push(`Total Projects: ${report.summary.totalProjects}`);
+    lines.push(`Changed Projects: ${report.summary.changedProjects}`);
+    lines.push('');
+    const projectsToShow = showChangedOnly
+        ? report.projects.filter(p => p.version?.versionChanged)
+        : report.projects;
+    for (const project of projectsToShow) {
+        const status = project.version?.versionChanged ? 'CHANGED' : 'UNCHANGED';
+        const version = project.version?.version || 'Unknown';
+        lines.push(`[${status}] ${project.name}: ${version}`);
+        lines.push(`  Path: ${project.path}`);
+        if (project.version?.versionChanged && project.version?.previousVersion) {
+            lines.push(`  Previous: ${project.version.previousVersion}`);
+        }
+        if (project.version?.changeReason) {
+            lines.push(`  Reason: ${project.version.changeReason}`);
+        }
+        if (project.dependencies?.direct && project.dependencies.direct.length > 0) {
+            lines.push(`  Dependencies: ${project.dependencies.direct.map(d => d.name).join(', ')}`);
+        }
+        lines.push('');
+    }
+    return lines.join('\n');
+}
+function formatAsCsv(report, showChangedOnly) {
+    const lines = [];
+    lines.push('Project,Version,Previous Version,Changed,Reason,Type,Path,Dependencies');
+    const projectsToShow = showChangedOnly
+        ? report.projects.filter(p => p.version?.versionChanged)
+        : report.projects;
+    for (const project of projectsToShow) {
+        const type = project.isTestProject ? 'Test' : (project.isPackable ? 'Package' : 'Other');
+        const version = project.version?.version || 'Unknown';
+        const previousVersion = project.version?.previousVersion || '';
+        const versionChanged = project.version?.versionChanged || false;
+        const changeReason = project.version?.changeReason || '';
+        const dependencies = project.dependencies?.direct?.map(d => d.name).join(';') || '';
+        lines.push(`"${project.name}","${version}","${previousVersion}","${versionChanged}","${changeReason}","${type}","${project.path}","${dependencies}"`);
+    }
+    return lines.join('\n');
+}
+async function postReportToPr(options) {
+    const octokit = github.getOctokit(options.token);
+    const context = github.context;
+    if (context.eventName !== 'pull_request') {
+        core.warning('Cannot post to PR: not a pull request event');
+        return;
+    }
+    const prNumber = context.payload.pull_request?.number;
+    if (!prNumber) {
+        core.warning('Cannot post to PR: no PR number found');
+        return;
+    }
+    const commentBody = `${options.header}\n\n${options.content}`;
+    try {
+        if (options.updateExisting) {
+            const comments = await octokit.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber
+            });
+            const existingComment = comments.data.find(comment => comment.body?.includes(options.header));
+            if (existingComment) {
+                await octokit.rest.issues.updateComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: existingComment.id,
+                    body: commentBody
+                });
+                core.info(`Updated existing PR comment #${existingComment.id}`);
+                return;
+            }
+        }
+        await octokit.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: prNumber,
+            body: commentBody
+        });
+        core.info(`Posted new PR comment to #${prNumber}`);
+    }
+    catch (error) {
+        core.warning(`Failed to post PR comment: ${error}`);
+    }
+}
+async function enhanceWithPreviousVersions(report, repoPath, tagPrefix) {
+    for (const project of report.projects) {
+        if (project.version?.versionChanged) {
+            const projectName = project.name;
+            const currentVersion = project.version.version;
+            try {
+                const tagsOutput = await exec.getExecOutput('git', ['tag', '-l', `${tagPrefix}${projectName}/*`, '--sort=-version:refname'], { cwd: repoPath, silent: true, ignoreReturnCode: true });
+                if (tagsOutput.exitCode === 0 && tagsOutput.stdout) {
+                    const tags = tagsOutput.stdout.trim().split('\n').filter(t => t);
+                    for (const tag of tags) {
+                        const tagVersion = tag.replace(`${tagPrefix}${projectName}/`, '');
+                        if (tagVersion !== currentVersion) {
+                            project.version.previousVersion = tagVersion;
+                            break;
+                        }
+                    }
+                }
+                if (!project.version.previousVersion) {
+                    const globalTagsOutput = await exec.getExecOutput('git', ['tag', '-l', `${tagPrefix}*`, '--sort=-version:refname'], { cwd: repoPath, silent: true, ignoreReturnCode: true });
+                    if (globalTagsOutput.exitCode === 0 && globalTagsOutput.stdout) {
+                        const tags = globalTagsOutput.stdout.trim().split('\n').filter(t => t);
+                        for (const tag of tags) {
+                            if (!tag.includes('/')) {
+                                const tagVersion = tag.replace(tagPrefix, '');
+                                if (tagVersion !== currentVersion) {
+                                    project.version.previousVersion = tagVersion;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (error) {
+            }
+        }
+    }
+}
+if (require.main === require.cache[eval('__filename')]) {
+    run();
+}
+
+
+/***/ }),
+
 /***/ 2613:
 /***/ ((module) => {
 
@@ -32246,7 +32276,7 @@ module.exports = parseParams
 /******/ 	// startup
 /******/ 	// Load entry module and return exports
 /******/ 	// This entry module is referenced by other modules so it can't be inlined
-/******/ 	var __webpack_exports__ = __nccwpck_require__(137);
+/******/ 	var __webpack_exports__ = __nccwpck_require__(9407);
 /******/ 	module.exports = __webpack_exports__;
 /******/ 	
 /******/ })()
