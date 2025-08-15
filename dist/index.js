@@ -29974,18 +29974,52 @@ async function run() {
         const postToPr = core.getBooleanInput('post-to-pr');
         const updateExistingComment = core.getBooleanInput('update-existing-comment');
         const commentHeader = core.getInput('comment-header') || '## 📊 Version Report';
+        const graphFormat = core.getInput('graph-format') || 'mermaid';
+        const showVersions = core.getBooleanInput('show-versions');
         const token = core.getInput('token');
         core.info('Generating version report...');
-        const report = await generateReport({
-            repositoryPath,
-            projectDir,
-            outputFormat: 'json',
-            branch,
-            tagPrefix,
-            includeCommits,
-            includeDependencies
-        });
-        const formattedContent = formatReport(report, outputFormat, showChangedOnly);
+        let formattedContent;
+        let report;
+        if (outputFormat.toLowerCase() === 'graph') {
+            report = await generateReport({
+                repositoryPath,
+                projectDir,
+                outputFormat: 'json',
+                branch,
+                tagPrefix,
+                includeCommits,
+                includeDependencies,
+                graphFormat,
+                showVersions,
+                showChangedOnly
+            });
+            formattedContent = await generateGraphReport({
+                repositoryPath,
+                projectDir,
+                branch,
+                tagPrefix,
+                includeCommits,
+                includeDependencies,
+                graphFormat,
+                showVersions,
+                showChangedOnly
+            });
+        }
+        else {
+            report = await generateReport({
+                repositoryPath,
+                projectDir,
+                outputFormat: 'json',
+                branch,
+                tagPrefix,
+                includeCommits,
+                includeDependencies,
+                graphFormat,
+                showVersions,
+                showChangedOnly
+            });
+            formattedContent = formatReport(report, outputFormat, showChangedOnly);
+        }
         let reportFilePath;
         if (outputFile) {
             reportFilePath = path.resolve(repositoryPath, outputFile);
@@ -30010,7 +30044,7 @@ async function run() {
             `- **Changed Projects**: ${report.summary.changedProjects}\n` +
             `- **Test Projects**: ${report.summary.testProjects}\n` +
             `- **Packable Projects**: ${report.summary.packableProjects}\n` +
-            `- **Output Format**: ${outputFormat}${outputFile ? `\n- **Report File**: \`${outputFile}\`` : ''}`);
+            `- **Output Format**: ${outputFormat}${outputFormat.toLowerCase() === 'graph' ? ` (${graphFormat})` : ''}${outputFile ? `\n- **Report File**: \`${outputFile}\`` : ''}`);
         if (changedProjects.length > 0) {
             await core.summary
                 .addDetails('🔄 Changed Projects', changedProjects.map(p => {
@@ -30032,7 +30066,11 @@ async function run() {
             await core.summary
                 .addDetails('🔗 Project Dependencies', depsSummary);
         }
-        if (outputFormat !== 'markdown') {
+        if (outputFormat.toLowerCase() === 'graph') {
+            await core.summary
+                .addDetails('📊 Dependency Graph', formattedContent);
+        }
+        else if (outputFormat !== 'markdown') {
             await core.summary
                 .addDetails('📋 Full Report Data', `\`\`\`${outputFormat}\n${formattedContent}\n\`\`\``);
         }
@@ -30142,6 +30180,44 @@ async function generateReport(options) {
     catch (error) {
         throw new Error(`Failed to parse report output: ${error}`);
     }
+}
+async function generateGraphReport(options) {
+    const args = [
+        'report',
+        '--repo', options.repositoryPath,
+        '--output', 'graph',
+        '--graph-format', options.graphFormat
+    ];
+    if (options.projectDir) {
+        args.push('--project-dir', options.projectDir);
+    }
+    if (options.branch) {
+        args.push('--branch', options.branch);
+    }
+    if (options.tagPrefix) {
+        args.push('--tag-prefix', options.tagPrefix);
+    }
+    args.push('--include-commits', options.includeCommits.toString());
+    args.push('--include-dependencies', options.includeDependencies.toString());
+    if (options.showVersions !== undefined) {
+        args.push('--show-versions', options.showVersions.toString());
+    }
+    if (options.showChangedOnly !== undefined) {
+        args.push('--changed-only', options.showChangedOnly.toString());
+    }
+    core.debug(`Executing mr-version with args: ${args.join(' ')}`);
+    let output = '';
+    await exec.exec('mr-version', args, {
+        listeners: {
+            stdout: (data) => {
+                output += data.toString();
+            },
+            stderr: (data) => {
+                core.warning(`mr-version stderr: ${data.toString()}`);
+            }
+        }
+    });
+    return output.trim();
 }
 function formatReport(report, format, showChangedOnly) {
     switch (format.toLowerCase()) {

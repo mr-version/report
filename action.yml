@@ -15,7 +15,7 @@ inputs:
     description: 'Directory containing projects to analyze (relative to repository-path)'
     required: false
   output-format:
-    description: 'Report output format (text, json, csv, markdown)'
+    description: 'Report output format (text, json, csv, markdown, graph)'
     required: false
     default: 'markdown'
   output-file:
@@ -52,6 +52,14 @@ inputs:
     description: 'Header text for PR comments to identify them'
     required: false
     default: '## 📊 Version Report'
+  graph-format:
+    description: 'Graph format when output-format is "graph" (mermaid, dot, ascii)'
+    required: false
+    default: 'mermaid'
+  show-versions:
+    description: 'Show version numbers in graph nodes'
+    required: false
+    default: 'true'
   token:
     description: 'GitHub token for posting PR comments'
     required: false

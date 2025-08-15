@@ -65,23 +65,60 @@ async function run(): Promise<void> {
     const postToPr = core.getBooleanInput('post-to-pr')
     const updateExistingComment = core.getBooleanInput('update-existing-comment')
     const commentHeader = core.getInput('comment-header') || '## 📊 Version Report'
+    const graphFormat = core.getInput('graph-format') || 'mermaid'
+    const showVersions = core.getBooleanInput('show-versions')
     const token = core.getInput('token')
 
     core.info('Generating version report...')
 
     // Generate the report using mr-version CLI
-    const report = await generateReport({
-      repositoryPath,
-      projectDir,
-      outputFormat: 'json', // Always get JSON first, then format it
-      branch,
-      tagPrefix,
-      includeCommits,
-      includeDependencies
-    })
+    let formattedContent: string
+    let report: VersionReport
+    
+    if (outputFormat.toLowerCase() === 'graph') {
+      // For graph output, get both JSON (for summary) and graph (for content)
+      report = await generateReport({
+        repositoryPath,
+        projectDir,
+        outputFormat: 'json',
+        branch,
+        tagPrefix,
+        includeCommits,
+        includeDependencies,
+        graphFormat,
+        showVersions,
+        showChangedOnly
+      })
+      
+      formattedContent = await generateGraphReport({
+        repositoryPath,
+        projectDir,
+        branch,
+        tagPrefix,
+        includeCommits,
+        includeDependencies,
+        graphFormat,
+        showVersions,
+        showChangedOnly
+      })
+    } else {
+      // For other formats, get JSON first then format it
+      report = await generateReport({
+        repositoryPath,
+        projectDir,
+        outputFormat: 'json',
+        branch,
+        tagPrefix,
+        includeCommits,
+        includeDependencies,
+        graphFormat,
+        showVersions,
+        showChangedOnly
+      })
 
-    // Format the report content
-    const formattedContent = formatReport(report, outputFormat, showChangedOnly)
+      // Format the report content
+      formattedContent = formatReport(report, outputFormat, showChangedOnly)
+    }
 
     // Save to file if specified
     let reportFilePath: string | undefined
@@ -114,7 +151,7 @@ async function run(): Promise<void> {
         `- **Changed Projects**: ${report.summary.changedProjects}\n` +
         `- **Test Projects**: ${report.summary.testProjects}\n` +
         `- **Packable Projects**: ${report.summary.packableProjects}\n` +
-        `- **Output Format**: ${outputFormat}${outputFile ? `\n- **Report File**: \`${outputFile}\`` : ''}`
+        `- **Output Format**: ${outputFormat}${outputFormat.toLowerCase() === 'graph' ? ` (${graphFormat})` : ''}${outputFile ? `\n- **Report File**: \`${outputFile}\`` : ''}`
       )
 
     if (changedProjects.length > 0) {
@@ -149,7 +186,10 @@ async function run(): Promise<void> {
         .addDetails('🔗 Project Dependencies', depsSummary)
     }
 
-    if (outputFormat !== 'markdown') {
+    if (outputFormat.toLowerCase() === 'graph') {
+      await core.summary
+        .addDetails('📊 Dependency Graph', formattedContent)
+    } else if (outputFormat !== 'markdown') {
       await core.summary
         .addDetails('📋 Full Report Data', 
           `\`\`\`${outputFormat}\n${formattedContent}\n\`\`\``
@@ -190,6 +230,21 @@ interface GenerateReportOptions {
   tagPrefix: string
   includeCommits: boolean
   includeDependencies: boolean
+  graphFormat?: string
+  showVersions?: boolean
+  showChangedOnly?: boolean
+}
+
+interface GenerateGraphReportOptions {
+  repositoryPath: string
+  projectDir?: string
+  branch?: string
+  tagPrefix: string
+  includeCommits: boolean
+  includeDependencies: boolean
+  graphFormat: string
+  showVersions?: boolean
+  showChangedOnly?: boolean
 }
 
 async function generateReport(options: GenerateReportOptions): Promise<VersionReport> {
@@ -294,6 +349,54 @@ async function generateReport(options: GenerateReportOptions): Promise<VersionRe
   } catch (error) {
     throw new Error(`Failed to parse report output: ${error}`)
   }
+}
+
+async function generateGraphReport(options: GenerateGraphReportOptions): Promise<string> {
+  const args = [
+    'report',
+    '--repo', options.repositoryPath,
+    '--output', 'graph',
+    '--graph-format', options.graphFormat
+  ]
+
+  if (options.projectDir) {
+    args.push('--project-dir', options.projectDir)
+  }
+
+  if (options.branch) {
+    args.push('--branch', options.branch)
+  }
+
+  if (options.tagPrefix) {
+    args.push('--tag-prefix', options.tagPrefix)
+  }
+
+  args.push('--include-commits', options.includeCommits.toString())
+  args.push('--include-dependencies', options.includeDependencies.toString())
+
+  if (options.showVersions !== undefined) {
+    args.push('--show-versions', options.showVersions.toString())
+  }
+
+  if (options.showChangedOnly !== undefined) {
+    args.push('--changed-only', options.showChangedOnly.toString())
+  }
+
+  core.debug(`Executing mr-version with args: ${args.join(' ')}`)
+
+  let output = ''
+  await exec.exec('mr-version', args, {
+    listeners: {
+      stdout: (data: Buffer) => {
+        output += data.toString()
+      },
+      stderr: (data: Buffer) => {
+        core.warning(`mr-version stderr: ${data.toString()}`)
+      }
+    }
+  })
+
+  return output.trim()
 }
 
 function formatReport(report: VersionReport, format: string, showChangedOnly: boolean): string {
