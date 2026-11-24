@@ -51,6 +51,13 @@ interface ProjectReport {
   isPackable: boolean
 }
 
+function getBool(name: string, defaultValue: boolean): boolean {
+  if (core.getInput(name).trim() === '') {
+    return defaultValue
+  }
+  return core.getBooleanInput(name)
+}
+
 async function run(): Promise<void> {
   try {
     const repositoryPath = core.getInput('repository-path') || '.'
@@ -59,14 +66,16 @@ async function run(): Promise<void> {
     const outputFile = core.getInput('output-file')
     const branch = core.getInput('branch')
     const tagPrefix = core.getInput('tag-prefix') || 'v'
-    const includeCommits = core.getBooleanInput('include-commits')
-    const includeDependencies = core.getBooleanInput('include-dependencies')
-    const showChangedOnly = core.getBooleanInput('changed-only')
-    const postToPr = core.getBooleanInput('post-to-pr')
-    const updateExistingComment = core.getBooleanInput('update-existing-comment')
+    const includeCommits = getBool('include-commits', true)
+    const includeDependencies = getBool('include-dependencies', true)
+    const includeTestProjects = getBool('include-test-projects', false)
+    const includeNonPackable = getBool('include-non-packable', false)
+    const showChangedOnly = getBool('changed-only', false)
+    const postToPr = getBool('post-to-pr', false)
+    const updateExistingComment = getBool('update-existing-comment', true)
     const commentHeader = core.getInput('comment-header') || '## 📊 Version Report'
     const graphFormat = core.getInput('graph-format') || 'mermaid'
-    const showVersions = core.getBooleanInput('show-versions')
+    const showVersions = getBool('show-versions', true)
     const token = core.getInput('token')
 
     core.info('Generating version report...')
@@ -85,6 +94,8 @@ async function run(): Promise<void> {
         tagPrefix,
         includeCommits,
         includeDependencies,
+        includeTestProjects,
+        includeNonPackable,
         graphFormat,
         showVersions,
         showChangedOnly
@@ -97,6 +108,8 @@ async function run(): Promise<void> {
         tagPrefix,
         includeCommits,
         includeDependencies,
+        includeTestProjects,
+        includeNonPackable,
         graphFormat,
         showVersions,
         showChangedOnly
@@ -111,6 +124,8 @@ async function run(): Promise<void> {
         tagPrefix,
         includeCommits,
         includeDependencies,
+        includeTestProjects,
+        includeNonPackable,
         graphFormat,
         showVersions,
         showChangedOnly
@@ -124,6 +139,7 @@ async function run(): Promise<void> {
     let reportFilePath: string | undefined
     if (outputFile) {
       reportFilePath = path.resolve(repositoryPath, outputFile)
+      await fs.promises.mkdir(path.dirname(reportFilePath), { recursive: true })
       await fs.promises.writeFile(reportFilePath, formattedContent)
       core.info(`Report saved to: ${reportFilePath}`)
     }
@@ -230,6 +246,8 @@ interface GenerateReportOptions {
   tagPrefix: string
   includeCommits: boolean
   includeDependencies: boolean
+  includeTestProjects: boolean
+  includeNonPackable: boolean
   graphFormat?: string
   showVersions?: boolean
   showChangedOnly?: boolean
@@ -242,9 +260,39 @@ interface GenerateGraphReportOptions {
   tagPrefix: string
   includeCommits: boolean
   includeDependencies: boolean
+  includeTestProjects: boolean
+  includeNonPackable: boolean
   graphFormat: string
-  showVersions?: boolean
-  showChangedOnly?: boolean
+  showVersions: boolean
+  showChangedOnly: boolean
+}
+
+interface CommonReportArgs {
+  includeCommits: boolean
+  includeDependencies: boolean
+  includeTestProjects: boolean
+  includeNonPackable: boolean
+}
+
+/**
+ * Boolean options are passed only when they differ from the CLI default:
+ * default-false options as a bare switch when true, default-true options as "--x false" when
+ * false. Older CLIs parse every bool as a switch and ignore a following value, so passing
+ * "--x false" to a default-false option used to turn it ON; newer CLIs accept true/false.
+ */
+function pushCommonBoolArgs(args: string[], options: CommonReportArgs): void {
+  if (!options.includeCommits) {
+    args.push('--include-commits', 'false')
+  }
+  if (!options.includeDependencies) {
+    args.push('--include-dependencies', 'false')
+  }
+  if (options.includeTestProjects) {
+    args.push('--include-test-projects')
+  }
+  if (options.includeNonPackable) {
+    args.push('--include-non-packable')
+  }
 }
 
 async function generateReport(options: GenerateReportOptions): Promise<VersionReport> {
@@ -266,18 +314,16 @@ async function generateReport(options: GenerateReportOptions): Promise<VersionRe
     args.push('--tag-prefix', options.tagPrefix)
   }
 
-  args.push('--include-commits', options.includeCommits.toString())
-  args.push('--include-dependencies', options.includeDependencies.toString())
-  args.push('--include-test-projects', 'true')
-  args.push('--include-non-packable', 'true')
+  pushCommonBoolArgs(args, options)
 
+  core.debug(`Executing: mr-version ${args.join(' ')}`)
   const output = await exec.getExecOutput('mr-version', args, {
     silent: true,
     ignoreReturnCode: true
   })
 
   if (output.exitCode !== 0) {
-    throw new Error(`mr-version report failed: ${output.stderr}`)
+    throw new Error(`mr-version report failed: ${output.stderr || output.stdout}`)
   }
 
   try {
@@ -316,9 +362,10 @@ async function generateReport(options: GenerateReportOptions): Promise<VersionRe
       })
       
       report = {
-        repository: options.repositoryPath,
-        branch: 'main', // Will be updated below
-        branchType: 'Main',
+        repository: rawOutput.repository || options.repositoryPath,
+        branch: rawOutput.branch || 'unknown',
+        branchType: rawOutput.branchType || 'Unknown',
+        globalVersion: rawOutput.globalVersion || undefined,
         projects: allProjects,
         summary: {
           totalProjects: allProjects.length,
@@ -371,32 +418,31 @@ async function generateGraphReport(options: GenerateGraphReportOptions): Promise
     args.push('--tag-prefix', options.tagPrefix)
   }
 
-  args.push('--include-commits', options.includeCommits.toString())
-  args.push('--include-dependencies', options.includeDependencies.toString())
+  pushCommonBoolArgs(args, options)
 
-  if (options.showVersions !== undefined) {
-    args.push('--show-versions', options.showVersions.toString())
+  if (!options.showVersions) {
+    args.push('--show-versions', 'false')
   }
 
-  if (options.showChangedOnly !== undefined) {
-    args.push('--changed-only', options.showChangedOnly.toString())
+  if (options.showChangedOnly) {
+    args.push('--changed-only')
   }
 
-  core.debug(`Executing mr-version with args: ${args.join(' ')}`)
+  core.debug(`Executing: mr-version ${args.join(' ')}`)
 
-  let output = ''
-  await exec.exec('mr-version', args, {
-    listeners: {
-      stdout: (data: Buffer) => {
-        output += data.toString()
-      },
-      stderr: (data: Buffer) => {
-        core.warning(`mr-version stderr: ${data.toString()}`)
-      }
-    }
+  const output = await exec.getExecOutput('mr-version', args, {
+    silent: true,
+    ignoreReturnCode: true
   })
 
-  return output.trim()
+  if (output.exitCode !== 0) {
+    throw new Error(`mr-version report (graph) failed: ${output.stderr || output.stdout}`)
+  }
+  if (output.stderr.trim()) {
+    core.warning(`mr-version stderr: ${output.stderr.trim()}`)
+  }
+
+  return output.stdout.trim()
 }
 
 function formatReport(report: VersionReport, format: string, showChangedOnly: boolean): string {
@@ -619,7 +665,8 @@ async function postReportToPr(options: PostToPrOptions): Promise<void> {
 
 async function enhanceWithPreviousVersions(report: VersionReport, repoPath: string, tagPrefix: string): Promise<void> {
   for (const project of report.projects) {
-    if (project.version?.versionChanged) {
+    // The CLI reports previousVersion itself; only look tags up for CLIs that do not
+    if (project.version?.versionChanged && !project.version.previousVersion) {
       // Try to find the previous version from git tags
       const projectName = project.name
       const currentVersion = project.version.version

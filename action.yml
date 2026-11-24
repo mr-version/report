@@ -40,6 +40,14 @@ inputs:
     description: 'Show only projects with version changes (false = show all projects)'
     required: false
     default: 'false'
+  include-test-projects:
+    description: 'Include test projects in the report'
+    required: false
+    default: 'false'
+  include-non-packable:
+    description: 'Include non-packable projects in the report'
+    required: false
+    default: 'false'
   post-to-pr:
     description: 'Post the report as a PR comment (requires pull_request event)'
     required: false
@@ -76,5 +84,5 @@ outputs:
     description: 'Number of projects with version changes'
 
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'dist/index.js'
