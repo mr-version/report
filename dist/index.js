@@ -29960,6 +29960,12 @@ const exec = __importStar(__nccwpck_require__(5236));
 const github = __importStar(__nccwpck_require__(3228));
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
+function getBool(name, defaultValue) {
+    if (core.getInput(name).trim() === '') {
+        return defaultValue;
+    }
+    return core.getBooleanInput(name);
+}
 async function run() {
     try {
         const repositoryPath = core.getInput('repository-path') || '.';
@@ -29968,14 +29974,16 @@ async function run() {
         const outputFile = core.getInput('output-file');
         const branch = core.getInput('branch');
         const tagPrefix = core.getInput('tag-prefix') || 'v';
-        const includeCommits = core.getBooleanInput('include-commits');
-        const includeDependencies = core.getBooleanInput('include-dependencies');
-        const showChangedOnly = core.getBooleanInput('changed-only');
-        const postToPr = core.getBooleanInput('post-to-pr');
-        const updateExistingComment = core.getBooleanInput('update-existing-comment');
+        const includeCommits = getBool('include-commits', true);
+        const includeDependencies = getBool('include-dependencies', true);
+        const includeTestProjects = getBool('include-test-projects', false);
+        const includeNonPackable = getBool('include-non-packable', false);
+        const showChangedOnly = getBool('changed-only', false);
+        const postToPr = getBool('post-to-pr', false);
+        const updateExistingComment = getBool('update-existing-comment', true);
         const commentHeader = core.getInput('comment-header') || '## 📊 Version Report';
         const graphFormat = core.getInput('graph-format') || 'mermaid';
-        const showVersions = core.getBooleanInput('show-versions');
+        const showVersions = getBool('show-versions', true);
         const token = core.getInput('token');
         core.info('Generating version report...');
         let formattedContent;
@@ -29989,6 +29997,8 @@ async function run() {
                 tagPrefix,
                 includeCommits,
                 includeDependencies,
+                includeTestProjects,
+                includeNonPackable,
                 graphFormat,
                 showVersions,
                 showChangedOnly
@@ -30000,6 +30010,8 @@ async function run() {
                 tagPrefix,
                 includeCommits,
                 includeDependencies,
+                includeTestProjects,
+                includeNonPackable,
                 graphFormat,
                 showVersions,
                 showChangedOnly
@@ -30014,6 +30026,8 @@ async function run() {
                 tagPrefix,
                 includeCommits,
                 includeDependencies,
+                includeTestProjects,
+                includeNonPackable,
                 graphFormat,
                 showVersions,
                 showChangedOnly
@@ -30023,6 +30037,7 @@ async function run() {
         let reportFilePath;
         if (outputFile) {
             reportFilePath = path.resolve(repositoryPath, outputFile);
+            await fs.promises.mkdir(path.dirname(reportFilePath), { recursive: true });
             await fs.promises.writeFile(reportFilePath, formattedContent);
             core.info(`Report saved to: ${reportFilePath}`);
         }
@@ -30093,6 +30108,20 @@ async function run() {
         core.setFailed(`Failed to generate version report: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
+function pushCommonBoolArgs(args, options) {
+    if (!options.includeCommits) {
+        args.push('--include-commits', 'false');
+    }
+    if (!options.includeDependencies) {
+        args.push('--include-dependencies', 'false');
+    }
+    if (options.includeTestProjects) {
+        args.push('--include-test-projects');
+    }
+    if (options.includeNonPackable) {
+        args.push('--include-non-packable');
+    }
+}
 async function generateReport(options) {
     const args = [
         'report',
@@ -30108,16 +30137,14 @@ async function generateReport(options) {
     if (options.tagPrefix) {
         args.push('--tag-prefix', options.tagPrefix);
     }
-    args.push('--include-commits', options.includeCommits.toString());
-    args.push('--include-dependencies', options.includeDependencies.toString());
-    args.push('--include-test-projects', 'true');
-    args.push('--include-non-packable', 'true');
+    pushCommonBoolArgs(args, options);
+    core.debug(`Executing: mr-version ${args.join(' ')}`);
     const output = await exec.getExecOutput('mr-version', args, {
         silent: true,
         ignoreReturnCode: true
     });
     if (output.exitCode !== 0) {
-        throw new Error(`mr-version report failed: ${output.stderr}`);
+        throw new Error(`mr-version report failed: ${output.stderr || output.stdout}`);
     }
     try {
         const rawOutput = JSON.parse(output.stdout);
@@ -30151,9 +30178,10 @@ async function generateReport(options) {
                 };
             });
             report = {
-                repository: options.repositoryPath,
-                branch: 'main',
-                branchType: 'Main',
+                repository: rawOutput.repository || options.repositoryPath,
+                branch: rawOutput.branch || 'unknown',
+                branchType: rawOutput.branchType || 'Unknown',
+                globalVersion: rawOutput.globalVersion || undefined,
                 projects: allProjects,
                 summary: {
                     totalProjects: allProjects.length,
@@ -30197,27 +30225,25 @@ async function generateGraphReport(options) {
     if (options.tagPrefix) {
         args.push('--tag-prefix', options.tagPrefix);
     }
-    args.push('--include-commits', options.includeCommits.toString());
-    args.push('--include-dependencies', options.includeDependencies.toString());
-    if (options.showVersions !== undefined) {
-        args.push('--show-versions', options.showVersions.toString());
+    pushCommonBoolArgs(args, options);
+    if (!options.showVersions) {
+        args.push('--show-versions', 'false');
     }
-    if (options.showChangedOnly !== undefined) {
-        args.push('--changed-only', options.showChangedOnly.toString());
+    if (options.showChangedOnly) {
+        args.push('--changed-only');
     }
-    core.debug(`Executing mr-version with args: ${args.join(' ')}`);
-    let output = '';
-    await exec.exec('mr-version', args, {
-        listeners: {
-            stdout: (data) => {
-                output += data.toString();
-            },
-            stderr: (data) => {
-                core.warning(`mr-version stderr: ${data.toString()}`);
-            }
-        }
+    core.debug(`Executing: mr-version ${args.join(' ')}`);
+    const output = await exec.getExecOutput('mr-version', args, {
+        silent: true,
+        ignoreReturnCode: true
     });
-    return output.trim();
+    if (output.exitCode !== 0) {
+        throw new Error(`mr-version report (graph) failed: ${output.stderr || output.stdout}`);
+    }
+    if (output.stderr.trim()) {
+        core.warning(`mr-version stderr: ${output.stderr.trim()}`);
+    }
+    return output.stdout.trim();
 }
 function formatReport(report, format, showChangedOnly) {
     switch (format.toLowerCase()) {
@@ -30394,7 +30420,7 @@ async function postReportToPr(options) {
 }
 async function enhanceWithPreviousVersions(report, repoPath, tagPrefix) {
     for (const project of report.projects) {
-        if (project.version?.versionChanged) {
+        if (project.version?.versionChanged && !project.version.previousVersion) {
             const projectName = project.name;
             const currentVersion = project.version.version;
             try {
